@@ -10,6 +10,7 @@ import (
 
 	otecmd "github.com/openshift-eng/openshift-tests-extension/pkg/cmd"
 	oteextension "github.com/openshift-eng/openshift-tests-extension/pkg/extension"
+	oteginkgo "github.com/openshift-eng/openshift-tests-extension/pkg/ginkgo"
 	"github.com/openshift/oauth-apiserver/pkg/version"
 )
 
@@ -51,13 +52,41 @@ func newOperatorTestCommand() (*cobra.Command, error) {
 	return cmd, nil
 }
 
+// prepareOperatorTestsRegistry creates the OTE registry for this component.
+//
+// Note:
+//
+// This method must be called before adding the registry to the OTE framework.
 func prepareOperatorTestsRegistry() (*oteextension.Registry, error) {
 	registry := oteextension.NewRegistry()
 	extension := oteextension.NewExtension("openshift", "payload", "oauth-apiserver")
 
-	// Note: Test package imports and oteginkgo.BuildExtensionTestSpecsFromOpenShiftGinkgoSuite()
-	// will be added in subsequent PRs when actual tests are migrated to the OTE framework.
+	// Non-disruptive tests run with default (Stable) cluster health monitoring.
+	extension.AddSuite(oteextension.Suite{
+		Name:        "openshift/oauth-apiserver/component/serial",
+		Parallelism: 1,
+		Qualifiers: []string{
+			`name.contains("[Component]") && name.contains("[Serial]") && !name.contains("[Disruptive]")`,
+		},
+	})
 
+	// Disruptive tests that cause expected cluster-wide disruption.
+	// Monitors will relax thresholds for this suite.
+	extension.AddSuite(oteextension.Suite{
+		Name:             "openshift/oauth-apiserver/component/serial-disruptive",
+		Parallelism:      1,
+		ClusterStability: oteextension.ClusterStabilityDisruptive,
+		Qualifiers: []string{
+			`name.contains("[Component]") && name.contains("[Serial]") && name.contains("[Disruptive]")`,
+		},
+	})
+
+	specs, err := oteginkgo.BuildExtensionTestSpecsFromOpenShiftGinkgoSuite()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't build extension test specs from ginkgo: %w", err)
+	}
+
+	extension.AddSpecs(specs)
 	registry.Register(extension)
 	return registry, nil
 }
