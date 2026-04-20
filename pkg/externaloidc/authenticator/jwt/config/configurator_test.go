@@ -40,14 +40,15 @@ invalid yaml content {{{
 			errContains: "reading authentication configuration from config file",
 		},
 		{
-			name:       "valid minimal config passes validation",
+			name:       "no jwt authenticators specified fails validation",
 			configFile: "config.yaml",
 			configContent: `
 apiVersion: config.openshift.io/v1alpha1
 kind: AuthenticationConfiguration
 jwt: []
 `,
-			wantErr: false,
+			wantErr:     true,
+			errContains: "jwt is required and must not be empty",
 		},
 		{
 			name:       "valid config with jwt authenticator passes validation",
