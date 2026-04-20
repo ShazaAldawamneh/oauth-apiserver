@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"k8s.io/apiserver/pkg/authentication/authenticator"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 	"k8s.io/apiserver/pkg/authentication/token/union"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	k8soidc "k8s.io/apiserver/plugin/pkg/authenticator/token/oidc"
@@ -20,6 +19,7 @@ import (
 	"github.com/openshift/oauth-apiserver/pkg/externaloidc/apis/authentication"
 	authenticationv1alpha1 "github.com/openshift/oauth-apiserver/pkg/externaloidc/apis/authentication/v1alpha1"
 	"github.com/openshift/oauth-apiserver/pkg/externaloidc/apis/authentication/validation"
+	externaloidccel "github.com/openshift/oauth-apiserver/pkg/externaloidc/cel"
 	"github.com/openshift/oauth-apiserver/pkg/externaloidc/oidc"
 	"github.com/spf13/pflag"
 )
@@ -69,7 +69,7 @@ func (c *Configurator) Validate() (*authentication.AuthenticationConfiguration, 
 		return nil, "", fmt.Errorf("reading authentication configuration from config file: %w", err)
 	}
 
-	compiler := authenticationcel.NewDefaultCompiler()
+	compiler := externaloidccel.NewCompiler()
 	fieldErrs := validation.ValidateAuthenticationConfiguration(compiler, authnConfig)
 	if err := fieldErrs.ToAggregate(); err != nil {
 		return nil, "", fmt.Errorf("validating authentication configuration: %w", err)
@@ -118,7 +118,7 @@ func (c *Configurator) handleConfigChange(ctx context.Context) error {
 	}
 
 	wrappedCtx, cancel := context.WithCancel(ctx)
-	compiler := authenticationcel.NewDefaultCompiler()
+	compiler := externaloidccel.NewCompiler()
 	tokenAuthenticator, err := TokenAuthenticatorForAuthenticationConfiguration(wrappedCtx, authnCfg, compiler)
 	if err != nil {
 		defer cancel()
@@ -166,7 +166,7 @@ func AuthenticationConfigurationFromConfigurationFile(fs filesystem.Filesystem, 
 	return out, string(configHash[:]), nil
 }
 
-func TokenAuthenticatorForAuthenticationConfiguration(ctx context.Context, cfg *authentication.AuthenticationConfiguration, compiler authenticationcel.Compiler) (authenticator.Token, error) {
+func TokenAuthenticatorForAuthenticationConfiguration(ctx context.Context, cfg *authentication.AuthenticationConfiguration, compiler oidc.Compiler) (authenticator.Token, error) {
 	jwtAuthenticators := []authenticator.Token{}
 
 	for _, jwt := range cfg.JWT {

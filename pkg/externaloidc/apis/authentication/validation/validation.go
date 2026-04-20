@@ -44,6 +44,10 @@ func ValidateAuthenticationConfiguration(compiler oidc.Compiler, c *authenticati
 	return errors
 }
 
+// External claim sources are limited to a maximum of 5 entries to
+// limit the number of calls to external sources that can be made
+// during the authentication process, reducing the risk
+// of authentication failure due to slow responses from external sources.
 const maxExternalClaimSources = 5
 
 func validateExternalClaimsSources(compiler oidc.Compiler, externalClaimsSources []authentication.ExternalClaimsSource, fldPath *field.Path) field.ErrorList {
@@ -150,6 +154,9 @@ func ValidateExternalClaimsSourceURLPathExpression(compiler oidc.Compiler, pathE
 	return nil
 }
 
+// External sourcing conditions are limited to 16 conditions per
+// external source as a mitigation for spending excessive time evaluating
+// conditions in which to consult an external source.
 const maxExternalSourceConditions = 16
 
 func validateExternalClaimsSourceConditions(compiler oidc.Compiler, externalSourceConditions []authentication.ExternalSourceCondition, path *field.Path) field.ErrorList {
@@ -195,6 +202,8 @@ func ValidateExternalSourceCondition(compiler oidc.Compiler, condition authentic
 	return nil
 }
 
+// Externally sourced claims are limited to 16 per external source
+// as a mitigation for spending excessive time evaluating CEL expressions.
 const maxSourcedClaimMappings = 16
 
 func validateExternalClaimsSourceMappings(compiler oidc.Compiler, sourcedClaimMappings []authentication.SourcedClaimMapping, seenExternalClaimNames sets.Set[string], path *field.Path) field.ErrorList {
@@ -248,6 +257,12 @@ func ValidateExternalClaimsSourceMappingExpression(compiler oidc.Compiler, expre
 
 var nameRegex = regexp.MustCompile("^([a-z_])+$")
 
+// Externally sourced claim names should not exceed 256 characters to
+// remain closely in line with general best practices of token claim names.
+// Token claims don't have an actually enforced limit, but because tokens
+// are included in request headers, it is common practice for claims to have
+// very short names. In practice, 256 characters should be sufficiently
+// long enough for any reasonably named claim name.
 const maxSourceMappingNameLength = 256
 
 // ValidateExternalClaimsSourceMappingName validates the claim name that will be populated
