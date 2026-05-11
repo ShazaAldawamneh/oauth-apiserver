@@ -299,15 +299,19 @@ func validateExternalClaimsSourceTLS(tls *authentication.TLS, path *field.Path) 
 		return nil
 	}
 
-	if tls.CertificateAuthority == nil {
-		return field.ErrorList{field.Required(path.Child("certificateAuthority"), "certificateAuthority is required")}
+	if tls.IsZero() {
+		return field.ErrorList{field.Invalid(path, tls, "at least one field must be set when tls is specified")}
 	}
 
-	if len(*tls.CertificateAuthority) < 1 {
-		return field.ErrorList{field.Invalid(path.Child("certificateAuthority"), *tls.CertificateAuthority, "certificateAuthority must not be empty and must be a valid PEM-encoded certificate")}
+	if tls.CertificateAuthority != nil {
+		if len(*tls.CertificateAuthority) < 1 {
+			return field.ErrorList{field.Invalid(path.Child("certificateAuthority"), *tls.CertificateAuthority, "certificateAuthority must not be empty when set and must be a valid PEM-encoded certificate")}
+		}
+
+		return validation.ValidateCertificateAuthority(*tls.CertificateAuthority, path.Child("certificateAuthority"))
 	}
 
-	return validation.ValidateCertificateAuthority(*tls.CertificateAuthority, path.Child("certificateAuthority"))
+	return nil
 }
 
 func validateExternalClaimsSourceAuthentication(authn *authentication.Authentication, path *field.Path) field.ErrorList {
@@ -315,7 +319,7 @@ func validateExternalClaimsSourceAuthentication(authn *authentication.Authentica
 		return nil
 	}
 
-	allowedTypes := sets.New(authentication.AuthenticationTypeRequestProvidedToken)
+	allowedTypes := sets.New(authentication.AuthenticationTypeRequestProvidedToken, authentication.AuthenticationTypeClientCredential)
 	if authn.Type == nil {
 		return field.ErrorList{field.Required(path.Child("type"), fmt.Sprintf("type is required and must be one of %v", sets.List(allowedTypes)))}
 	}
@@ -324,5 +328,130 @@ func validateExternalClaimsSourceAuthentication(authn *authentication.Authentica
 		return field.ErrorList{field.Invalid(path.Child("type"), *authn.Type, fmt.Sprintf("type must be one of %v", sets.List(allowedTypes)))}
 	}
 
+	allErrs := field.ErrorList{}
+
+	switch *authn.Type {
+	case authentication.AuthenticationTypeClientCredential:
+		allErrs = append(allErrs, validateClientCredentialConfig(authn.ClientCredential, path.Child("clientCredential"))...)
+	default:
+		// clientCredential must not be set for non-ClientCredential types
+		if authn.ClientCredential != nil {
+			allErrs = append(allErrs, field.Forbidden(path.Child("clientCredential"), "clientCredential must not be set when type is not ClientCredential"))
+		}
+	}
+
+	return allErrs
+}
+
+func validateClientCredentialConfig(cfg *authentication.ClientCredentialConfig, path *field.Path) field.ErrorList {
+	if cfg == nil {
+		return field.ErrorList{field.Required(path, "clientCredential is required when type is ClientCredential")}
+	}
+
+	allErrs := field.ErrorList{}
+
+	allErrs = append(allErrs, ValidateClientCredentialConfigClientID(cfg.ClientID, path.Child("clientID"))...)
+	allErrs = append(allErrs, ValidateClientCredentialConfigClientSecret(cfg.ClientSecret, path.Child("clientSecret"))...)
+	allErrs = append(allErrs, ValidateTokenEndpoint(cfg.TokenEndpoint, path.Child("tokenEndpoint"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceTLS(cfg.TLS, path.Child("tls"))...)
+
+	for i, scope := range cfg.Scopes {
+		allErrs = append(allErrs, ValidateClientCredentialConfigScope(scope, path.Child("scopes").Index(i))...)
+	}
+
+	return allErrs
+}
+
+// As documented in https://datatracker.ietf.org/doc/html/rfc6749#appendix-A.4 OAuth2 scope-tokens
+// must only consist of printable ascii characters, not including spaces, double quotes, and backslashes.
+// Because our API structure uses a list type for specifying the scopes, we do not allow space delimiting
+// as a signal of a distinct scope.
+// Scope-tokens are documented as 1*NQCHAR, where NQCHAR is equivalent to ( %x21 / %x23-5B / %x5D-7E ).
+// %x21 converted to ASCII is the exclamation point character ('!').
+// %x23 converted to ASCII is the hash character ('#').
+// 5B converted to ASCII is the left bracket character ('[').
+// %x5D converted to ASCII is the right bracket character (']').
+// 7E converted to ASCII is the tilde character ('~').
+//
+// The regular expression below ensures that only strings that start, contain, and end with
+// characters within these ASCII ranges are considered valid for a scope entry.
+var scopeRegex = regexp.MustCompile(`^[!#-[\]-~]+$`)
+
+func ValidateClientCredentialConfigScope(scope string, path *field.Path) field.ErrorList {
+	if len(scope) == 0 {
+		return field.ErrorList{field.Invalid(path, scope, "scope must not be an empty string")}
+	}
+
+	if !scopeRegex.MatchString(scope) {
+		return field.ErrorList{field.Invalid(path, scope, "scope must only contain printable ascii characters, not including spaces, double quotes and backslashes")}
+	}
+
 	return nil
+}
+
+// printableASCIIRegexp matches strings that consist entirely of printable ASCII
+// characters (0x20-0x7E) as defined by RFC 6749 Appendix A (VSCHAR = %x20-7E).
+var printableASCIIRegexp = regexp.MustCompile(`^[[:print:]]+$`)
+
+func ValidateClientCredentialConfigClientID(clientID string, path *field.Path) field.ErrorList {
+	if len(clientID) == 0 {
+		return field.ErrorList{field.Required(path, "clientID is required and must not be an empty string")}
+	}
+
+	if !printableASCIIRegexp.MatchString(clientID) {
+		return field.ErrorList{field.Invalid(path, clientID, "clientID must only contain printable ASCII characters")}
+	}
+
+	return nil
+}
+
+func ValidateClientCredentialConfigClientSecret(clientSecret string, path *field.Path) field.ErrorList {
+	if len(clientSecret) == 0 {
+		return field.ErrorList{field.Required(path, "clientSecret is required and must not be an empty string")}
+	}
+
+	if !printableASCIIRegexp.MatchString(clientSecret) {
+		return field.ErrorList{field.Invalid(path, "<masked>", "clientSecret must only contain printable ASCII characters")}
+	}
+
+	return nil
+}
+
+func ValidateTokenEndpoint(tokenEndpoint string, path *field.Path) field.ErrorList {
+	if len(tokenEndpoint) == 0 {
+		return field.ErrorList{field.Required(path, "tokenEndpoint is required and must not be an empty string")}
+	}
+
+	u, err := url.Parse(tokenEndpoint)
+	if err != nil {
+		return field.ErrorList{field.Invalid(path, tokenEndpoint, fmt.Sprintf("tokenEndpoint must be a valid URL: %v", err))}
+	}
+
+	allErrs := field.ErrorList{}
+
+	if u.Scheme != "https" {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must use the https scheme"))
+	}
+
+	if u.Host == "" {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must have a host"))
+	}
+
+	if u.Path == "" {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must have a path"))
+	}
+
+	if u.RawQuery != "" {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must not contain query parameters"))
+	}
+
+	if u.Fragment != "" {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must not contain a fragment"))
+	}
+
+	if u.User != nil {
+		allErrs = append(allErrs, field.Invalid(path, tokenEndpoint, "tokenEndpoint must not contain user information"))
+	}
+
+	return allErrs
 }

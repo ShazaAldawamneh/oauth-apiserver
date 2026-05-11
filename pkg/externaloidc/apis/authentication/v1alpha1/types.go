@@ -355,6 +355,7 @@ type ExternalClaimsSource struct {
 	Authentication *Authentication `json:"authentication,omitempty"`
 	// tls is an optional field that configures the http client TLS
 	// settings when fetching external claims from this source.
+	// At least one subfield must be set when this field is specified.
 	// +optional
 	TLS *TLS `json:"tls,omitempty"`
 	// url is a required configuration of the URL
@@ -392,11 +393,12 @@ type ExternalClaimsSource struct {
 
 // TLS configures the TLS options that the apiserver uses as a client
 // when making a request to the external claim source.
+// At least one field must be set when specified.
 type TLS struct {
-	// certificateAuthority is a required field that configures the certificate authority
+	// certificateAuthority is an optional field that configures the certificate authority
 	// used to validate TLS connections with the external claims source.
 	// Must not be empty and must be a valid PEM-encoded certificate.
-	// +required
+	// +optional
 	CertificateAuthority *string `json:"certificateAuthority,omitempty"`
 }
 
@@ -407,13 +409,26 @@ type Authentication struct {
 	// authentication method used by the authenticator
 	// when fetching external claims.
 	//
-	// Allowed values are 'RequestProvidedToken'.
+	// Allowed values are 'RequestProvidedToken' and 'ClientCredential'.
 	//
 	// When set to 'RequestProvidedToken', the authenticator will
 	// use the token provided to the kube-apiserver as part of the
 	// request to authenticate with the external claims source.
+	//
+	// When set to 'ClientCredential', the authenticator will
+	// use the configured client-id, client-secret, and token endpoint
+	// to fetch an access token using the OAuth2 client credentials grant
+	// flow. The fetched access token will then be used to authenticate
+	// with the external claims source.
 	// +required
 	Type *AuthenticationType `json:"type,omitempty"`
+
+	// clientCredential configures the client credentials
+	// and token endpoint to use to get an access token.
+	// This field must be set when type is ClientCredential.
+	// This field must not be set when type is not ClientCredential.
+	// +optional
+	ClientCredential *ClientCredentialConfig `json:"clientCredential,omitempty"`
 }
 
 // AuthenticationType is the type of authentication that should be used
@@ -429,7 +444,55 @@ const (
 	// the UserInfo endpoint that contains additional information about the
 	// user not present in the token.
 	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
+
+	// AuthenticationTypeClientCredential is an AuthenticationType
+	// that represents that the authenticator should use the OAuth2
+	// client credentials grant flow to obtain an access token for
+	// authenticating with the external claims source.
+	// This is useful for scenarios such as fetching user information
+	// from Microsoft's Graph API where a separate client credential
+	// is needed to access the API.
+	AuthenticationTypeClientCredential AuthenticationType = "ClientCredential"
 )
+
+// ClientCredentialConfig configures the client credentials and token endpoint
+// to use to get an access token via the OAuth2 client credentials grant flow.
+type ClientCredentialConfig struct {
+	// clientID is the client identifier to use during the OAuth2 client credentials flow.
+	// clientID must not be an empty string ("").
+	// clientID must only contain printable ASCII characters.
+	// +required
+	ClientID string `json:"clientID,omitempty"`
+
+	// clientSecret is the client secret to use during the OAuth2 client credentials flow.
+	// clientSecret is the literal string value of the client secret.
+	// clientSecret must not be an empty string ("").
+	// clientSecret must only contain printable ASCII characters.
+	// +required
+	ClientSecret string `json:"clientSecret,omitempty"`
+
+	// tokenEndpoint is a required URL to query for an access token using
+	// the client credential OAuth2 flow.
+	// tokenEndpoint must not be an empty string ("").
+	// tokenEndpoint must be a valid HTTPS URL.
+	// tokenEndpoint must have a host and a path.
+	// tokenEndpoint must not contain query parameters, fragments,
+	// or user information (e.g., "user:password@host").
+	// +required
+	TokenEndpoint string `json:"tokenEndpoint,omitempty"`
+
+	// scopes is an optional list of OAuth2 scopes to request when obtaining
+	// an access token. If not specified, the token endpoint's default scopes
+	// will be used. Each scope must not be an empty string ("").
+	// +optional
+	Scopes []string `json:"scopes,omitempty"`
+
+	// tls is an optional field that configures the http client TLS
+	// settings when fetching an access token for this source.
+	// At least one subfield must be set when this field is specified.
+	// +optional
+	TLS *TLS `json:"tls,omitempty"`
+}
 
 // SourceURL configures the options used to build the URL that is queried for external claims.
 type SourceURL struct {
