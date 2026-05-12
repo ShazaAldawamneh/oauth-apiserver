@@ -1,15 +1,22 @@
-package validation_test
+package validation
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/pem"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"k8s.io/apimachinery/pkg/util/errors"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 	"k8s.io/utils/ptr"
 
+	certutil "k8s.io/client-go/util/cert"
+
 	"github.com/openshift/oauth-apiserver/pkg/externaloidc/apis/authentication"
-	"github.com/openshift/oauth-apiserver/pkg/externaloidc/apis/authentication/validation"
+	externaloidccel "github.com/openshift/oauth-apiserver/pkg/externaloidc/cel"
 )
 
 // NOTE: These test cases were taken from
@@ -644,11 +651,1254 @@ func TestValidateAuthenticationConfiguration(t *testing.T) {
 			},
 			want: "",
 		},
+
+		// NOTE: From here on, these are test cases we have added for OpenShift-specific implementation
+
+		{
+			name: "valid authentication configuration with an external claims source",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with external claims sources, too many",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: func() []authentication.ExternalClaimsSource {
+							out := []authentication.ExternalClaimsSource{}
+							for i := range maxExternalClaimSources + 1 {
+								out = append(out, authentication.ExternalClaimsSource{
+									Authentication: &authentication.Authentication{
+										Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+									},
+									URL: &authentication.SourceURL{
+										Hostname:       ptr.To("test.kubernetes.com"),
+										PathExpression: ptr.To("['claims']"),
+									},
+									Mappings: []authentication.SourcedClaimMapping{
+										{
+											Name:       ptr.To(strings.Repeat("a", i+1)),
+											Expression: ptr.To("response.groups.join(',')"),
+										},
+									},
+								})
+							}
+							return out
+						}(),
+					},
+				},
+			},
+			want: fmt.Sprintf("jwt[0].externalClaimsSources: Too many: %d: must have at most %d items", maxExternalClaimSources+1, maxExternalClaimSources),
+		},
+		{
+			name: "valid authentication configuration with an external claims source, authentication not specified",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, authentication specified, authentication.type not specified",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.type: Required value: type is required and must be one of [RequestProvidedToken]",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, authentication specified, authentication.type not valid option",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationType("NotARealAuthenticationType")),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.type: Invalid value: \"NotARealAuthenticationType\": type must be one of [RequestProvidedToken]",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, tls specified, tls.certificateAuthority omitted",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								TLS: &authentication.TLS{},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].tls.certificateAuthority: Required value: certificateAuthority is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, tls specified, tls.certificateAuthority empty string",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								TLS: &authentication.TLS{
+									CertificateAuthority: ptr.To(""),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].tls.certificateAuthority: Invalid value: \"\": certificateAuthority must not be empty and must be a valid PEM-encoded certificate",
+		},
+		{
+			name: "valid authentication configuration with an external claims source, tls specified, tls.certificateAuthority valid certificate",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								TLS: &authentication.TLS{
+									CertificateAuthority: func() *string {
+										caPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+										if err != nil {
+											t.Fatal(err)
+										}
+										caCert, err := certutil.NewSelfSignedCACert(certutil.Config{CommonName: "test-ca"}, caPrivateKey)
+										if err != nil {
+											t.Fatal(err)
+										}
+										return ptr.To(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw})))
+									}(),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, no mappings",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings: Required value: mappings is required and must not be an empty list.",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, too many mappings",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: func() []authentication.SourcedClaimMapping {
+									out := []authentication.SourcedClaimMapping{}
+									for i := range maxSourcedClaimMappings + 1 {
+										out = append(out, authentication.SourcedClaimMapping{
+											Name:       ptr.To(strings.Repeat("a", i+1)),
+											Expression: ptr.To("'test'"),
+										})
+									}
+									return out
+								}(),
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings: Too many: 17: must have at most 16 items",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, duplicate mapping names in single source",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("'true'"),
+									},
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[1].name: Duplicate value: \"groups\"",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, duplicate mapping names across sources",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['otherclaims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[1].mappings[0].name: Duplicate value: \"groups\"",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with no name",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].name: Required value: name is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with empty string name",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To(""),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].name: Invalid value: \"\": name must not be an empty string (\"\")",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with name not matching pattern",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("ABC789"),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].name: Invalid value: \"ABC789\": name must consist of only lowercase alpha characters and underscores ('_').",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with too long name",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To(strings.Repeat("a", maxSourceMappingNameLength+1)),
+										Expression: ptr.To("'true'"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].name: Too long: may not be more than 256 bytes",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with no expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name: ptr.To("groups"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].expression: Required value: expression is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with empty string expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To(""),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].expression: Invalid value: \"\": expression must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, mapping with invalid expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("notreal.claims.thing"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].mappings[0].expression: Invalid value: \"notreal.claims.thing\": error compiling expression: compilation failed: ERROR: <input>:1:1: undeclared reference to 'notreal' (in container '')\n | notreal.claims.thing\n | ^",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, conditions specified with too many conditions",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups"),
+									},
+								},
+								Conditions: func() []authentication.ExternalSourceCondition {
+									out := []authentication.ExternalSourceCondition{}
+									for i := range maxExternalSourceConditions + 1 {
+										out = append(out, authentication.ExternalSourceCondition{
+											Expression: ptr.To(fmt.Sprintf("!has(claims.%s)", strings.Repeat("a", i+1))),
+										})
+									}
+									return out
+								}(),
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].conditions: Too many: 17: must have at most 16 items",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, condition specified, condition missing expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups"),
+									},
+								},
+								Conditions: []authentication.ExternalSourceCondition{
+									{},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].conditions[0].expression: Required value: expression is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, condition specified, condition has empty string expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups"),
+									},
+								},
+								Conditions: []authentication.ExternalSourceCondition{
+									{
+										Expression: ptr.To(""),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].conditions[0].expression: Invalid value: \"\": expression must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, condition specified, condition has invalid expression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups"),
+									},
+								},
+								Conditions: []authentication.ExternalSourceCondition{
+									{
+										Expression: ptr.To("response.something"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].conditions[0].expression: Invalid value: \"response.something\": error compiling expression: compilation failed: ERROR: <input>:1:1: undeclared reference to 'response' (in container '')\n | response.something\n | ^",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, condition specified, conditions has duplicate expressions",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("['claims']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups"),
+									},
+								},
+								Conditions: []authentication.ExternalSourceCondition{
+									{
+										Expression: ptr.To("!has(claims.groups)"),
+									},
+									{
+										Expression: ptr.To("!has(claims.groups)"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].conditions[1].expression: Duplicate value: \"!has(claims.groups)\"",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, no source url",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url: Required value: url is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, no hostname",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									PathExpression: ptr.To("[claims.path]"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.hostname: Required value: hostname is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, invalid hostname",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("ABC-.123.C0m"),
+									PathExpression: ptr.To("[claims.path]"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.hostname: Invalid value: \"ABC-.123.C0m\": hostname must be a valid RFC1123 subdomain name (start/end with a lowercase alphanumeric character and only contain lowercase alphanumeric characters, '-', and '.'), optionally followed by a non-zero port.",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, hostname with port number to big",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.example.com:70000"),
+									PathExpression: ptr.To("[claims.path]"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.hostname: Invalid value: \"test.example.com:70000\": port of the hostname must not be greater than 65535",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, hostname with port number set to 0",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.example.com:0"),
+									PathExpression: ptr.To("[claims.path]"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.hostname: Invalid value: \"test.example.com:0\": hostname must be a valid RFC1123 subdomain name (start/end with a lowercase alphanumeric character and only contain lowercase alphanumeric characters, '-', and '.'), optionally followed by a non-zero port.",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, no pathExpression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname: ptr.To("test.kubernetes.com"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.pathExpression: Required value: pathExpression is required",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, empty pathExpression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To(""),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.pathExpression: Invalid value: \"\": pathExpression must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, source url, invalid pathExpression",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("test.kubernetes.com"),
+									PathExpression: ptr.To("[response.thing]"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].url.pathExpression: Invalid value: \"[response.thing]\": error compiling expression: compilation failed: ERROR: <input>:1:2: undeclared reference to 'response' (in container '')\n | [response.thing]\n | .^",
+		},
 	}
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			got := validation.ValidateAuthenticationConfiguration(authenticationcel.NewDefaultCompiler(), tt.in).ToAggregate()
+			got := ValidateAuthenticationConfiguration(externaloidccel.NewCompiler(), tt.in).ToAggregate()
 			if d := cmp.Diff(tt.want, errString(got)); d != "" {
 				t.Fatalf("AuthenticationConfiguration validation mismatch (-want +got):\n%s", d)
 			}
