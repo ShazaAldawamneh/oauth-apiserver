@@ -66,7 +66,7 @@ func New(ctx context.Context, opts Options) (k8soidc.AuthenticatorTokenWithHealt
 		opts.Compiler = externaloidccel.NewCompiler()
 	}
 
-	externalClaimsExpanders, err := buildExternalClaimsExpanders(opts.Compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
+	externalClaimsExpanders, err := buildExternalClaimsExpanders(ctx, opts.Compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
 	if err != nil {
 		return nil, fmt.Errorf("building external claims expanders: %w", err)
 	}
@@ -86,10 +86,10 @@ func New(ctx context.Context, opts Options) (k8soidc.AuthenticatorTokenWithHealt
 	return k8soidc.New(ctx, k8sOpts)
 }
 
-func buildExternalClaimsExpanders(compiler Compiler, externalClaimSources ...authentication.ExternalClaimsSource) ([]k8soidc.ClaimsExpander, error) {
+func buildExternalClaimsExpanders(ctx context.Context, compiler Compiler, externalClaimSources ...authentication.ExternalClaimsSource) ([]k8soidc.ClaimsExpander, error) {
 	expanders := make([]k8soidc.ClaimsExpander, 0, len(externalClaimSources))
 	for _, source := range externalClaimSources {
-		tokenGetter, err := buildExternalClaimsTokenGetter(source.Authentication)
+		tokenGetter, err := buildExternalClaimsTokenGetter(ctx, source.Authentication)
 		if err != nil {
 			return nil, fmt.Errorf("building access token getter: %w", err)
 		}
@@ -105,7 +105,7 @@ func buildExternalClaimsExpanders(compiler Compiler, externalClaimSources ...aut
 	return expanders, nil
 }
 
-func buildExternalClaimsTokenGetter(authn *authentication.Authentication) (externalclaimsresolver.AccessTokenGetter, error) {
+func buildExternalClaimsTokenGetter(ctx context.Context, authn *authentication.Authentication) (externalclaimsresolver.AccessTokenGetter, error) {
 	if authn == nil {
 		return &tokengetters.Anonymous{}, nil
 	}
@@ -117,6 +117,11 @@ func buildExternalClaimsTokenGetter(authn *authentication.Authentication) (exter
 	switch *authn.Type {
 	case authentication.AuthenticationTypeRequestProvidedToken:
 		return &tokengetters.RequestProvided{}, nil
+	case authentication.AuthenticationTypeClientCredential:
+		if authn.ClientCredential == nil {
+			return nil, fmt.Errorf("client credential configuration is required when authentication type is ClientCredential")
+		}
+		return tokengetters.NewClientCredential(ctx, authn.ClientCredential)
 	default:
 		return nil, fmt.Errorf("unknown authentication type %q", *authn.Type)
 	}

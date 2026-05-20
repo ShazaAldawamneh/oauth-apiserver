@@ -799,7 +799,7 @@ func TestValidateAuthenticationConfiguration(t *testing.T) {
 					},
 				},
 			},
-			want: "jwt[0].externalClaimsSources[0].authentication.type: Required value: type is required and must be one of [RequestProvidedToken]",
+			want: "jwt[0].externalClaimsSources[0].authentication.type: Required value: type is required and must be one of [ClientCredential RequestProvidedToken]",
 		},
 		{
 			name: "invalid authentication configuration with an external claims source, authentication specified, authentication.type not valid option",
@@ -836,7 +836,776 @@ func TestValidateAuthenticationConfiguration(t *testing.T) {
 					},
 				},
 			},
-			want: "jwt[0].externalClaimsSources[0].authentication.type: Invalid value: \"NotARealAuthenticationType\": type must be one of [RequestProvidedToken]",
+			want: "jwt[0].externalClaimsSources[0].authentication.type: Invalid value: \"NotARealAuthenticationType\": type must be one of [ClientCredential RequestProvidedToken]",
+		},
+		{
+			name: "valid authentication configuration with an external claims source, ClientCredential authentication",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, missing clientCredential",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.clientCredential: Required value: clientCredential is required when type is ClientCredential",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, empty id",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.clientCredential.clientID: Required value: clientID is required and must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, empty secret",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.clientCredential.clientSecret: Required value: clientSecret is required and must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, empty tokenEndpoint",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Required value: tokenEndpoint is required and must not be an empty string",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, non-https tokenEndpoint",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "http://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "http://login.example.com/oauth2/token": tokenEndpoint must use the https scheme`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential authentication, tokenEndpoint with no host",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https:///oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "https:///oauth2/token": tokenEndpoint must have a host`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, RequestProvidedToken with clientCredential set (forbidden)",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeRequestProvidedToken),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "jwt[0].externalClaimsSources[0].authentication.clientCredential: Forbidden: clientCredential must not be set when type is not ClientCredential",
+		},
+		{
+			name: "valid authentication configuration with an external claims source, ClientCredential with certificateAuthority",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+										TLS: &authentication.TLS{
+											CertificateAuthority: func() *string {
+												caPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+												if err != nil {
+													t.Fatal(err)
+												}
+												caCert, err := certutil.NewSelfSignedCACert(certutil.Config{CommonName: "test-ca"}, caPrivateKey)
+												if err != nil {
+													t.Fatal(err)
+												}
+												return ptr.To(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw})))
+											}(),
+										},
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential with empty certificateAuthority",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+										TLS: &authentication.TLS{
+											CertificateAuthority: ptr.To(""),
+										},
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tls.certificateAuthority: Invalid value: "": certificateAuthority must not be empty when set and must be a valid PEM-encoded certificate`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential with empty scope in scopes list",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+										Scopes:        []string{"https://graph.microsoft.com/.default", ""},
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.scopes[1]: Invalid value: "": scope must not be an empty string`,
+		},
+		{
+			name: "valid authentication configuration with an external claims source, ClientCredential with scopes",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+										Scopes:        []string{"https://graph.microsoft.com/.default"},
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential with non-ASCII clientID",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "client-\x00-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.clientID: Invalid value: "client-\x00-id": clientID must only contain printable ASCII characters`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential with non-ASCII clientSecret",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "secret-\xff",
+										TokenEndpoint: "https://login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.clientSecret: Invalid value: "<masked>": clientSecret must only contain printable ASCII characters`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential tokenEndpoint with query parameters",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token?foo=bar",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "https://login.example.com/oauth2/token?foo=bar": tokenEndpoint must not contain query parameters`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential tokenEndpoint with fragment",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com/oauth2/token#frag",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "https://login.example.com/oauth2/token#frag": tokenEndpoint must not contain a fragment`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential tokenEndpoint with user info",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://user:pass@login.example.com/oauth2/token",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "https://user:pass@login.example.com/oauth2/token": tokenEndpoint must not contain user information`,
+		},
+		{
+			name: "invalid authentication configuration with an external claims source, ClientCredential tokenEndpoint with no path",
+			in: &authentication.AuthenticationConfiguration{
+				JWT: []authentication.JWTAuthenticator{
+					{
+						Issuer: &authentication.Issuer{
+							URL:       "https://issuer-url",
+							Audiences: []string{"audience"},
+						},
+						ClaimMappings: &authentication.ClaimMappings{
+							Username: authentication.PrefixedClaimOrExpression{
+								Claim:  "sub",
+								Prefix: ptr.To("prefix"),
+							},
+						},
+						ExternalClaimsSources: []authentication.ExternalClaimsSource{
+							{
+								Authentication: &authentication.Authentication{
+									Type: ptr.To(authentication.AuthenticationTypeClientCredential),
+									ClientCredential: &authentication.ClientCredentialConfig{
+										ClientID:      "my-client-id",
+										ClientSecret:  "my-client-secret",
+										TokenEndpoint: "https://login.example.com",
+									},
+								},
+								URL: &authentication.SourceURL{
+									Hostname:       ptr.To("api.example.com"),
+									PathExpression: ptr.To("['v1', 'users']"),
+								},
+								Mappings: []authentication.SourcedClaimMapping{
+									{
+										Name:       ptr.To("groups"),
+										Expression: ptr.To("response.groups.join(',')"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: `jwt[0].externalClaimsSources[0].authentication.clientCredential.tokenEndpoint: Invalid value: "https://login.example.com": tokenEndpoint must have a path`,
 		},
 		{
 			name: "invalid authentication configuration with an external claims source, tls specified, tls.certificateAuthority omitted",
@@ -874,7 +1643,7 @@ func TestValidateAuthenticationConfiguration(t *testing.T) {
 					},
 				},
 			},
-			want: "jwt[0].externalClaimsSources[0].tls.certificateAuthority: Required value: certificateAuthority is required",
+			want: "jwt[0].externalClaimsSources[0].tls: Invalid value: {\"CertificateAuthority\":null}: at least one field must be set when tls is specified",
 		},
 		{
 			name: "invalid authentication configuration with an external claims source, tls specified, tls.certificateAuthority empty string",
@@ -914,7 +1683,7 @@ func TestValidateAuthenticationConfiguration(t *testing.T) {
 					},
 				},
 			},
-			want: "jwt[0].externalClaimsSources[0].tls.certificateAuthority: Invalid value: \"\": certificateAuthority must not be empty and must be a valid PEM-encoded certificate",
+			want: "jwt[0].externalClaimsSources[0].tls.certificateAuthority: Invalid value: \"\": certificateAuthority must not be empty when set and must be a valid PEM-encoded certificate",
 		},
 		{
 			name: "valid authentication configuration with an external claims source, tls specified, tls.certificateAuthority valid certificate",
